@@ -2,6 +2,39 @@
   "name": "@react-native-windows/perf-testing",
   "entries": [
     {
+      "date": "Wed, 08 Jul 2026 18:28:38 GMT",
+      "version": "0.0.0-canary.1039",
+      "tag": "@react-native-windows/perf-testing_v0.0.0-canary.1039",
+      "comments": {
+        "prerelease": [
+          {
+            "author": "email not defined",
+            "package": "@react-native-windows/perf-testing",
+            "commit": "883b2f4803a7b65a4c72b76edc830adb0d5b78c1",
+            "comment": "Integrate RN 0.85.0-nightly-20260303-c26dbe286"
+          },
+          {
+            "author": "email not defined",
+            "package": "@react-native-windows/perf-testing",
+            "commit": "883b2f4803a7b65a4c72b76edc830adb0d5b78c1",
+            "comment": "Integrate RN 0.85.0-nightly-20260128-36f07a1b2"
+          },
+          {
+            "author": "email not defined",
+            "package": "@react-native-windows/perf-testing",
+            "commit": "883b2f4803a7b65a4c72b76edc830adb0d5b78c1",
+            "comment": "Integrate RN 0.85.0-nightly-20260224-42cd0f041"
+          },
+          {
+            "author": "email not defined",
+            "package": "@react-native-windows/perf-testing",
+            "commit": "883b2f4803a7b65a4c72b76edc830adb0d5b78c1",
+            "comment": "Integrate RN 0.85.0-nightly-20260210-4535df4f6"
+          }
+        ]
+      }
+    },
+    {
       "date": "Tue, 21 Apr 2026 02:54:29 GMT",
       "version": "0.0.0-canary.1038",
       "tag": "@react-native-windows/perf-testing_v0.0.0-canary.1038",

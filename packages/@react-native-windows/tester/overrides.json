@@ -5,7 +5,7 @@
   "excludePatterns": [
     "src/js/examples-win/**"
   ],
-  "baseVersion": "0.88.0-nightly-20260908-3e897cfdf",
+  "baseVersion": "0.88.1",
   "overrides": [
     {
       "type": "copy",
@@ -104,7 +104,7 @@
       "type": "patch",
       "file": "src/js/examples/Pressable/PressableExample.windows.js",
       "baseFile": "packages/rn-tester/js/examples/Pressable/PressableExample.js",
-      "baseHash": "b8a25360dfe8ca7412862756624ce298aed07dde",
+      "baseHash": "e91c89b5d06be655a0561253eeb2fb6ede1e6ab2",
       "issue": 6240
     },
     {

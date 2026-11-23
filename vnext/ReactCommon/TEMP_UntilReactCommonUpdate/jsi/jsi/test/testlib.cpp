@@ -1078,10 +1078,24 @@ TEST_P(JSITest, JSErrorsCanBeConstructedWithStack) {
 }
 
 TEST_P(JSITest, JSErrorDoesNotInfinitelyRecurse) {
-  Value globalError = rt.global().getProperty(rt, "Error");
-  rt.global().setProperty(rt, "Error", Value::undefined());
+  // JSError(rt, message) creates its value with createError. Use the default
+  // implementation, which calls the global Error constructor, so that removing
+  // it below makes creating the Error fail even if the runtime has a native
+  // createError.
+  class RD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit RD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    Value createError(const String& msg) override {
+      return Runtime::createError(msg);
+    }
+  };
+  RD drt(rt);
+
+  Value globalError = drt.global().getProperty(drt, "Error");
+  drt.global().setProperty(drt, "Error", Value::undefined());
   try {
-    rt.global().getPropertyAsFunction(rt, "NotAFunction");
+    drt.global().getPropertyAsFunction(drt, "NotAFunction");
     FAIL() << "expected exception";
   } catch (const JSError& ex) {
     EXPECT_EQ(
@@ -1104,14 +1118,14 @@ TEST_P(JSITest, JSErrorDoesNotInfinitelyRecurse) {
           "function (f) { try { f(); return 'undefined'; }"
           "catch (e) { return typeof e; } }")
           .call(
-              rt,
+              drt,
               Function::createFromHostFunction(
-                  rt, PropNameID::forAscii(rt, "fails"), 0, fails))
-          .getString(rt)
-          .utf8(rt),
+                  drt, PropNameID::forAscii(drt, "fails"), 0, fails))
+          .getString(drt)
+          .utf8(drt),
       "string");
 
-  rt.global().setProperty(rt, "Error", globalError);
+  drt.global().setProperty(drt, "Error", globalError);
 }
 
 TEST_P(JSITest, JSErrorStackOverflowHandling) {
@@ -1762,6 +1776,54 @@ TEST_P(JSITest, CreateFromUtf16Test) {
   EXPECT_EQ(cp, 55357); // 0xD83D in decimal
 }
 
+TEST_P(JSITest, CreateValueFromJsonUtf8Test) {
+  uint8_t jsonText[] = "{\"a\": 1}";
+
+  // This Runtime Decorator is used to test the default createValueFromJsonUtf8
+  // implementation for VMs that do not provide their own implementation
+  class DefaultRD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit DefaultRD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    Value createValueFromJsonUtf8(const uint8_t* json, size_t length) override {
+      return Runtime::createValueFromJsonUtf8(json, length);
+    }
+  };
+
+  DefaultRD defaultRd(rt);
+  Object obj =
+      Value::createFromJsonUtf8(defaultRd, jsonText, sizeof(jsonText) - 1)
+          .getObject(defaultRd);
+  EXPECT_EQ(obj.getProperty(defaultRd, "a").getNumber(), 1);
+
+  // A RuntimeDecorator must forward createValueFromJsonUtf8 to the runtime it
+  // decorates, like every other method.
+  class CountingRD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit CountingRD(Runtime& rt) : RuntimeDecorator(rt) {}
+
+    Value createValueFromJsonUtf8(const uint8_t* json, size_t length) override {
+      ++count;
+      return plain().createValueFromJsonUtf8(json, length);
+    }
+
+    int count = 0;
+  };
+
+  // Overrides nothing, so it should forward everything to CountingRD.
+  class OuterRD : public RuntimeDecorator<Runtime, Runtime> {
+   public:
+    explicit OuterRD(Runtime& rt) : RuntimeDecorator(rt) {}
+  };
+
+  CountingRD counting(rt);
+  OuterRD outer(counting);
+  obj = outer.createValueFromJsonUtf8(jsonText, sizeof(jsonText) - 1)
+            .getObject(outer);
+  EXPECT_EQ(counting.count, 1);
+  EXPECT_EQ(obj.getProperty(outer, "a").getNumber(), 1);
+}
+
 TEST_P(JSITest, GetStringDataTest) {
   // This Runtime Decorator is used to test the default getStringData
   // implementation for VMs that do not provide their own implementation
@@ -2288,6 +2350,17 @@ TEST_P(JSITest, ArrayBufferDetachedTest) {
     EXPECT_FALSE(ab.detached(rd));
   } catch (const JSINativeException&) {
     // Runtime doesn't support ArrayBuffer.prototype.detached, skip the rest.
+    return;
+  }
+
+  // Skip the rest if the runtime has no way to detach an ArrayBuffer from JS.
+  bool canDetach =
+      eval(
+          "typeof buf.transfer === 'function' || "
+          "(typeof HermesInternal !== 'undefined' && "
+          " typeof HermesInternal.detachArrayBuffer === 'function')")
+          .getBool();
+  if (!canDetach) {
     return;
   }
 

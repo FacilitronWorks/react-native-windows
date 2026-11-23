@@ -1487,10 +1487,11 @@ std::pair<float, float> WindowsTextInputComponentView::GetContentSize() const no
   //
   // That is deliberate and matched in JS: the apps' Windows TextInput shim
   // (windows-shims/text-input.windows.tsx) adds paddingBottom = line height to
-  // cancel exactly that offset. Native and JS MUST move together. Switching this to
-  // upstream's -1 (which measures the real height) without removing the JS
-  // compensation moves single-line text in every Windows TextInput up by one line;
-  // removing the JS compensation without this change parks it one line low.
+  // cancel exactly that offset (lineHeight / 2). Native and JS MUST move together.
+  // Switching this to upstream's -1 (which measures the real height) without
+  // removing the JS compensation moves single-line text in every Windows TextInput
+  // up by half a line; removing the JS compensation without this change parks it
+  // half a line low.
   constexpr float UNBOUNDED_HEIGHT_DIPS = 1.0e6f;
   SIZE extentHimetric = {
       static_cast<LONG>(availableWidth * HIMETRIC_PER_INCH / DIPS_PER_INCH),
@@ -1498,13 +1499,12 @@ std::pair<float, float> WindowsTextInputComponentView::GetContentSize() const no
 
   // TxGetNaturalSize's pwidth/pheight are IN/OUT parameters: on INPUT they carry the
   // size to fit the content WITHIN (in device pixels of hdc); on OUTPUT RichEdit
-  // overwrites them with the measured natural size. Seeding them {0, 0} asks RichEdit
-  // to fit the text into a ZERO-width box, and it answers with a degenerate 1x1 --
-  // measured on-device: "natCx=1 natCy=1" for a 443-DIP-wide input. contentHeight then
-  // collapses to ~0 and calculateContentVerticalOffset() centers on
-  // (frameHeight - 0) / 2, parking the line at the BOTTOM of the control -- the
-  // long-standing "text sits low / descenders clipped" symptom. Seed the available
-  // width, converted DIP -> device px with the DC's own DPI.
+  // overwrites them with the measured natural size. Stock RNW seeded them {0, 0},
+  // i.e. a zero-width box. Seed the available width instead (DIP -> device px with
+  // the DC's own DPI) so the call honours that contract. This does NOT change the
+  // measured height: on device the result was natCy=1 with or without the seed,
+  // because of the positive extent above. The seed is not the centering fix; the JS
+  // compensation is.
   SIZE naturalSize = {static_cast<LONG>(availableWidth * hdcDpiX / DIPS_PER_INCH), 0};
 
   HRESULT hr = m_textServices->TxGetNaturalSize(

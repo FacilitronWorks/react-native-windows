@@ -1469,19 +1469,28 @@ std::pair<float, float> WindowsTextInputComponentView::GetContentSize() const no
   constexpr float HIMETRIC_PER_INCH = 2540.0f;
   constexpr float DIPS_PER_INCH = 96.0f;
 
-  // The cy extent is the "unbounded height" sentinel for TXTNS_FITTOCONTENTWSP.
-  // It must NOT be LONG_MAX run through the DIP->HIMETRIC conversion: LONG_MAX *
-  // 2540 / 96 is ~5.68e10, which overflows LONG by ~26.5x. static_cast<LONG> of an
-  // out-of-range float is undefined behavior and on MSVC/x64 (cvttss2si) yields the
-  // integer-indefinite value 0x80000000 == LONG_MIN, so RichEdit was handed a
-  // NEGATIVE height constraint. TxGetNaturalSize then returns cy == 0, contentHeight
-  // collapses to 0, and calculateContentVerticalOffset() centers on
-  // (boxHeight - 0) / 2 -- which is exactly the "text parked low / clipped at the
-  // bottom" symptom. This is independent of the DPI normalization above: the stock
-  // code (LONG_MAX * 2540 / dpi) overflows identically, which is why the DPI fix
-  // alone did not change rendering on machines where the overflow dominates.
-  // Use a large FINITE extent instead -- 1e6 DIPs is far beyond any real text block
-  // and converts to ~2.65e7 HIMETRIC, comfortably inside LONG.
+  // The cy extent passed to TxGetNaturalSize (TXTNS_FITTOCONTENTWSP).
+  //
+  // Stock RNW used LONG_MAX run through the DIP->HIMETRIC conversion. LONG_MAX *
+  // 2540 / 96 is ~5.68e10, which does not fit in a LONG, and the out-of-range
+  // float->LONG cast differs by architecture: x64 gets LONG_MIN, ARM64 saturates to
+  // LONG_MAX. Per upstream #16482, RichEdit treats a NEGATIVE extent as
+  // unconstrained but a POSITIVE one as a zoom reference, so the stock code
+  // measured on x64 but returned a height of ~0 on ARM64; upstream now passes -1.
+  //
+  // This patch keeps a large FINITE positive extent (1e6 DIPs, ~2.65e7 HIMETRIC,
+  // inside LONG) so the cast is well defined and identical on x64 and ARM64. Being
+  // positive, it is a zoom reference too: TxGetNaturalSize returns a degenerate
+  // height (measured on device 2026-08-14, x64 at 200%: natCy=1 for an empty field
+  // and for a 22-character string). contentHeight is therefore ~0 on EVERY
+  // architecture, and calculateContentVerticalOffset() centers on (box - 0) / 2.
+  //
+  // That is deliberate and matched in JS: the apps' Windows TextInput shim
+  // (windows-shims/text-input.windows.tsx) adds paddingBottom = line height to
+  // cancel exactly that offset. Native and JS MUST move together. Switching this to
+  // upstream's -1 (which measures the real height) without removing the JS
+  // compensation moves single-line text in every Windows TextInput up by one line;
+  // removing the JS compensation without this change parks it one line low.
   constexpr float UNBOUNDED_HEIGHT_DIPS = 1.0e6f;
   SIZE extentHimetric = {
       static_cast<LONG>(availableWidth * HIMETRIC_PER_INCH / DIPS_PER_INCH),

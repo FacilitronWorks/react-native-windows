@@ -39,13 +39,7 @@ static std::wstring AppFontsDirectory() noexcept {
 // on every Store account (package-acceptance rejection), so instead we build the collection at
 // runtime here and hand it to CreateTextFormat. Built once, cached. Fails closed: on any error
 // it returns nullptr and callers fall back to the system collection (previous behavior, no crash).
-winrt::com_ptr<::IDWriteFontCollection> DWriteAppFontCollection() noexcept {
-  static winrt::com_ptr<::IDWriteFontCollection> s_collection;
-  static bool s_initialized = false;
-  if (s_initialized) {
-    return s_collection;
-  }
-  s_initialized = true;
+static winrt::com_ptr<::IDWriteFontCollection> BuildAppFontCollection() noexcept {
   try {
     const auto factory5 = DWriteFactory().as<::IDWriteFactory5>();
 
@@ -79,10 +73,17 @@ winrt::com_ptr<::IDWriteFontCollection> DWriteAppFontCollection() noexcept {
     winrt::check_hresult(builder->CreateFontSet(mergedSet.put()));
     winrt::com_ptr<::IDWriteFontCollection1> collection1;
     winrt::check_hresult(factory5->CreateFontCollectionFromFontSet(mergedSet.get(), collection1.put()));
-    s_collection = collection1.as<::IDWriteFontCollection>();
+    return collection1.as<::IDWriteFontCollection>();
   } catch (...) {
-    s_collection = nullptr; // fall back to the system collection at call sites
+    return nullptr; // fall back to the system collection at call sites
   }
+}
+
+// Called from the layout thread (text measure) and the UI thread (paragraph mount). A
+// function-local static is initialised exactly once, and C++11 makes concurrent first
+// callers wait for it, so no caller can see a half-built (nullptr) collection.
+winrt::com_ptr<::IDWriteFontCollection> DWriteAppFontCollection() noexcept {
+  static const winrt::com_ptr<::IDWriteFontCollection> s_collection = BuildAppFontCollection();
   return s_collection;
 }
 

@@ -39,4 +39,43 @@
     <_WindowsAppSDKFoundationPlatform>x64</_WindowsAppSDKFoundationPlatform>
     <_MrtCoreRuntimeIdentifier>x64</_MrtCoreRuntimeIdentifier>
   </PropertyGroup>
+  <!-- FIT WAVE 10: 32-bit-compiler compensation for the new-arch RNW source build.
+       Under the 32-bit-hosted cl.exe (PreferredToolArchitecture=x86, ~4GB cap)
+       Microsoft.ReactNative's Release /O2 optimizer C1002s, and its giant PCH C3859s, on the
+       huge generated WinRT headers. Scope a lighter, PCH-less compile to ONLY this project so
+       it stays under 4GB. Since RNW 0.83.3 the vendored Folly and fmt sources (external\)
+       compile inside this project too, so they get the same settings. /O1 size-opt is still
+       a real optimization level. No-PCH shifts benign warnings (C4459) under /WX, so relax
+       /WX here only. -->
+  <!-- Also disable Whole Program Optimization / LTCG for this project: the /GL link-time
+       codegen backend hits a deterministic C1001 internal compiler error on this codebase
+       under /O1 (reproduced with 10GB free, so not memory). LTCG is a whole-program speed
+       optimization we don't need for a Beta; a plain link is reliable. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' And '$(MSBuildProjectName)' == 'Microsoft.ReactNative'">
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+  </PropertyGroup>
+  <!-- These 32-bit-compiler compensations apply ONLY under the 32-bit host. They are skipped
+       under both 64-bit hosts, which have no 4GB cap, so PCH + full /O2 are used (measured
+       59 -> 10 min per architecture on ARM64):
+       - x64: RNW's PropertySheets/React.Cpp.props defaults PreferredToolArchitecture to x64,
+         and the Azure Windows pipelines pass /p:PreferredToolArchitecture=x64 (WAP-2417:
+         this path used to keep the no-PCH compile there, ~1h55m per architecture);
+       - arm64: Directory.Build.props selects it on Windows-on-ARM.
+       WholeProgramOptimization=false above stays ON for all hosts (C1001 = LTCG backend bug,
+       not memory, so LTCG stays off everywhere). -->
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Release' And '$(MSBuildProjectName)' == 'Microsoft.ReactNative' And '$(PreferredToolArchitecture)' != 'arm64' And '$(PreferredToolArchitecture)' != 'x64'">
+    <ClCompile>
+      <Optimization>MinSpace</Optimization>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <FavorSizeOrSpeed>Size</FavorSizeOrSpeed>
+      <MinimalRebuild>false</MinimalRebuild>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+    </ClCompile>
+    <Link>
+      <LinkTimeCodeGeneration>Default</LinkTimeCodeGeneration>
+    </Link>
+  </ItemDefinitionGroup>
+
 </Project>

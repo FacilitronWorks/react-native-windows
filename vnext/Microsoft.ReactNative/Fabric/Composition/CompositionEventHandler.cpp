@@ -1362,6 +1362,53 @@ void CompositionEventHandler::onPointerPressed(
     }
   }
 
+  // FIT: instant self-heal - when the OS delivers a NEW touch contact marked
+  // PRIMARY (the first finger of a fresh gesture: no other contacts are down
+  // system-wide), any touch/pen entry still in m_activeTouches is by definition a
+  // leaked phantom from a swallowed release/cancel (observed live: a checkbox press
+  // whose Release never reached the island left a phantom finger that rode along in
+  // every later dispatch, making the JS responder treat each tap as corrupt
+  // multi-touch - presses stopped firing). Upstream (0.84+) cancels a stale entry
+  // only for the SAME pointer id, routed-away and capture-lost pointers; a leaked
+  // entry under a different id is still kept, so cancel the leftovers NOW and the
+  // tap being processed lands on a clean responder. Real multi-touch is safe: a
+  // genuine second finger arrives with IsPrimary=false and skips this purge. A
+  // mouse button held at the same time is not a touch contact, so it is kept.
+  if (pointerPoint.PointerDeviceType() == Composition::Input::PointerDeviceType::Touch &&
+      pointerPoint.Properties().IsPrimary() && !m_activeTouches.empty()) {
+    std::vector<PointerId> leftoverIds;
+    for (auto const &entry : m_activeTouches) {
+      if (entry.first != pointerId && entry.second.touchType != UITouchType::Mouse) {
+        leftoverIds.push_back(entry.first);
+      }
+    }
+    for (auto leftoverId : leftoverIds) {
+      CancelActiveTouchForPointerInternal(leftoverId, pointerPoint, keyModifiers);
+    }
+  }
+
+  // FIT: time-based backstop sweep - cancel and drop any active touch that has had
+  // no pointer update for over 5 seconds (real taps live well under a second; RNW
+  // scroll pans ride the interaction tracker, not JS touches). Covers non-touch
+  // device types and any path the primary-contact purge above can't see.
+  // Uses the HighResTimeStamp touch.timeStamp, which UpdateActiveTouch restamps on
+  // every update (#16483). The deprecated Float touch.timestamp is seconds from a
+  // local origin since #16483, not epoch milliseconds, so it can't be compared
+  // with a wall clock.
+  {
+    constexpr double kStaleTouchMs = 5000.0;
+    const auto now = facebook::react::HighResTimeStamp::now();
+    std::vector<PointerId> agedIds;
+    for (auto const &entry : m_activeTouches) {
+      if (entry.first != pointerId && (now - entry.second.touch.timeStamp).toDOMHighResTimeStamp() > kStaleTouchMs) {
+        agedIds.push_back(entry.first);
+      }
+    }
+    for (auto agedId : agedIds) {
+      CancelActiveTouchForPointerInternal(agedId, pointerPoint, keyModifiers);
+    }
+  }
+
   const auto eventType = TouchEventType::Start;
 
   if (std::shared_ptr<FabricUIManager> fabricuiManager =

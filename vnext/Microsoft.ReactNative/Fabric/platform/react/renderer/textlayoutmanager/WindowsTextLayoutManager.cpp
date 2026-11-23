@@ -116,7 +116,7 @@ void WindowsTextLayoutManager::GetTextLayout(
       outerFragment.textAttributes.fontFamily.empty()
           ? L"Segoe UI"
           : Microsoft::Common::Unicode::Utf8ToUtf16(outerFragment.textAttributes.fontFamily).c_str(),
-      nullptr, // Font collection (nullptr sets it to use the system font collection).
+      Microsoft::ReactNative::DWriteAppFontCollection().get(), // FIT: system + bundled app fonts (nullptr => system-only)
       static_cast<DWRITE_FONT_WEIGHT>(outerFragment.textAttributes.fontWeight.value_or(
           static_cast<facebook::react::FontWeight>(DWRITE_FONT_WEIGHT_REGULAR))),
       style,

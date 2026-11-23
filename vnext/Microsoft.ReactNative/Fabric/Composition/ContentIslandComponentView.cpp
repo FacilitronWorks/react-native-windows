@@ -68,6 +68,23 @@ void ContentIslandComponentView::ConnectInternal() noexcept {
 
   ChildSiteLink().ActualSize({m_layoutMetrics.frame.size.width, m_layoutMetrics.frame.size.height});
 
+  // FIT WAVE: apply the point scale to the island's placement visual. The child
+  // site reports ShouldApplyRasterizationScale = false, i.e. the HOST is
+  // responsible for scaling the island's output at presentation — but this
+  // placement visual sits in RNW's physical-pixel composition tree unscaled, so
+  // hosted content (measured live: site ActualSize 1368x728 DIPs, raster scale
+  // 2.0) rendered at half size in the top-left quadrant of its frame on a 200%
+  // display. Scaling the placement visual is the missing "system applies it"
+  // step: content lays out at DIP size, rasterizes at 2x, presents at 2x —
+  // full-size and pixel-sharp. At 100% DPI this is Scale(1,1,1), a no-op.
+  {
+    auto fitwavePlacementVisual =
+        winrt::Microsoft::ReactNative::Composition::Experimental::CompositionContextHelper::InnerVisual(Visual())
+            .as<winrt::Microsoft::UI::Composition::ContainerVisual>();
+    const float fitwaveScale = m_layoutMetrics.pointScaleFactor;
+    fitwavePlacementVisual.Scale({fitwaveScale, fitwaveScale, 1.0f});
+  }
+
   // Issue #15557: Set initial LocalToParentTransformMatrix synchronously before Connect.
   // This fixes popup position being wrong even without scrolling.
   // Note: getClientRect() returns physical pixels, but LocalToParentTransformMatrix expects DIPs.

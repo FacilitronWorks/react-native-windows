@@ -5,6 +5,17 @@
   <Import Condition="Exists($([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../')))" Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
 
   <PropertyGroup>
+    <!-- FIT WAVE 10: on Windows-on-ARM (Apple Silicon Parallels) ONLY, force the native
+         ARM64 host compiler for the RNW framework projects. The MSVC default resolves to the
+         32-bit x86 host, which there runs under Prism EMULATION *and* hits a 4GB cap on RNW's
+         huge generated headers (C1002/C3859) -> the /O1+no-PCH workarounds. HostArm64 removes
+         both -> PCH + /O2 restored, ~6x faster (59min -> 10min/arch, measured).
+         Scope is ARM-only: x64 hosts need nothing here, because RNW's
+         PropertySheets/React.Cpp.props already defaults PreferredToolArchitecture to x64 (and
+         the Azure Windows pipelines pass it explicitly). Keyed off OSArchitecture => a strict
+         NO-OP on x64 (cloud, Intel) and any non-ARM host. -->
+    <_FitNativeOSArch>$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)</_FitNativeOSArch>
+    <PreferredToolArchitecture Condition="('$(PreferredToolArchitecture)' == '' Or '$(PreferredToolArchitecture)' == 'x86') And '$(_FitNativeOSArch)' == 'Arm64'">arm64</PreferredToolArchitecture>
     <SolutionDir Condition="'$(SolutionDir)' == '' OR '$(SolutionDir)' == '*Undefined*'">$(MSBuildThisFileDirectory)</SolutionDir>
 
     <!-- This property can be used to affect project builds in-repo (as opposed to by customers) -->

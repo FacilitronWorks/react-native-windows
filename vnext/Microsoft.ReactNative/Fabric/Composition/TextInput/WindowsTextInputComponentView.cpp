@@ -18,6 +18,8 @@
 #include <winrt/Microsoft.UI.Input.h>
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.h>
+#include <winrt/Windows.UI.ViewManagement.h>
+#include <inputpaneinterop.h>
 #include <mutex>
 #include "../Composition.Input.h"
 #include "../CompositionHelpers.h"
@@ -55,6 +57,12 @@ std::string BstrToStdString(BSTR bstr, int cp = CP_UTF8) {
   BstrToStdString(bstr, str, cp);
   return str;
 }
+
+// GetDeviceCaps (used in GetContentSize to normalize RichEdit's device-pixel
+// measurements to DIPs) is exported from Gdi32. Microsoft.ReactNative does not
+// otherwise reference Gdi32, so link it explicitly to avoid an unresolved
+// external symbol (LNK2019) in builds that don't already pull it in transitively.
+#pragma comment(lib, "Gdi32.lib")
 
 MSO_CLASS_GUID(ITextHost, "13E670F4-1A5A-11cf-ABEB-00AA00B65EA1") // IID_ITextHost
 MSO_CLASS_GUID(ITextServices, "8D33F740-CF58-11CE-A89D-00AA006CADC5") // IID_ITextServices
@@ -787,6 +795,11 @@ void WindowsTextInputComponentView::OnPointerPressed(
 
     emitter->onPressIn(pressInArgs);
   }
+
+  // FIT: tapping the field brings up the touch keyboard — including when the input is
+  // already focused (e.g. after the user dismissed the keyboard), which does not fire
+  // onGotFocus.
+  ShowSoftKeyboard();
 }
 
 void WindowsTextInputComponentView::OnPointerReleased(
@@ -1036,7 +1049,12 @@ void WindowsTextInputComponentView::OnCharacterReceived(
       auto emitter = std::static_pointer_cast<const facebook::react::WindowsTextInputEventEmitter>(m_eventEmitter);
       facebook::react::WindowsTextInputEventEmitter::OnSubmitEditing onSubmitEditingArgs;
       onSubmitEditingArgs.text = GetTextFromRichEdit();
-      onSubmitEditingArgs.eventCount = ++m_nativeEventCount;
+      // WAP-2047: report the CURRENT count, do not advance it. Submitting does not
+      // change the text, and m_nativeEventCount is exactly what the setTextAndSelection
+      // guard compares JS's eventCount against. Bumping it here makes every later
+      // programmatic set from JS look stale and get dropped. iOS/Android only advance
+      // their counter in the text watcher.
+      onSubmitEditingArgs.eventCount = m_nativeEventCount;
       emitter->onSubmitEditing(onSubmitEditingArgs);
     }
 
@@ -1134,11 +1152,53 @@ void WindowsTextInputComponentView::onLostFocus(
     facebook::react::WindowsTextInputEventEmitter::OnEndEditing onEndEditingArgs;
 
     // Set event arguments
-    onEndEditingArgs.eventCount = ++m_nativeEventCount;
+    // WAP-2047: as onSubmitEditing - blurring does not change the text, so it must not
+    // advance the counter the setTextAndSelection guard tests. This is the reported
+    // failure: type into a filter, click Show (blur -> ++count), then Clear; JS sends
+    // value="" carrying its last text-change count, the guard sees a lower number and
+    // silently rejects it, so the stale text stays painted.
+    onEndEditingArgs.eventCount = m_nativeEventCount;
     onEndEditingArgs.text = GetTextFromRichEdit();
 
     // Emit the event
     emitter->onEndEditing(onEndEditingArgs);
+  }
+}
+
+void WindowsTextInputComponentView::ShowSoftKeyboard() noexcept {
+  // FIT: on a tablet with no physical keyboard the shell never auto-invokes the touch
+  // keyboard for our windowless RichEdit host — this is a WinAppSDK island app (no
+  // CoreWindow; the RichEdit is hosted via ITextServices with no child input HWND), so
+  // the OS heuristic can't see a focused edit control and never fires. Request the touch
+  // keyboard explicitly via the InputPane Win32 interop, keyed off the island's top-level
+  // AppWindow HWND (rootComponentView()->GetHwndForParenting()). Gated to slate/tablet
+  // posture (SM_CONVERTIBLESLATEMODE == 0) so it does not pop on a laptop/convertible with
+  // a keyboard attached. Called on focus AND on pointer press, so tapping an
+  // already-focused input reopens a keyboard the user had dismissed (a tap on an
+  // already-focused field does not fire onGotFocus). Best-effort — never let keyboard
+  // invocation break input handling.
+  if (::GetSystemMetrics(SM_CONVERTIBLESLATEMODE) != 0)
+    return;
+  auto root = rootComponentView();
+  if (!root)
+    return;
+  HWND hwnd = root->GetHwndForParenting();
+  if (!hwnd)
+    return;
+  try {
+    auto interop =
+        winrt::get_activation_factory<winrt::Windows::UI::ViewManagement::InputPane>()
+            .as<::IInputPaneInterop>();
+    winrt::Windows::UI::ViewManagement::InputPane inputPane{nullptr};
+    if (interop &&
+        SUCCEEDED(interop->GetForWindow(
+            hwnd,
+            winrt::guid_of<winrt::Windows::UI::ViewManagement::InputPane>(),
+            winrt::put_abi(inputPane))) &&
+        inputPane) {
+      inputPane.TryShow();
+    }
+  } catch (...) {
   }
 }
 
@@ -1161,6 +1221,9 @@ void WindowsTextInputComponentView::onGotFocus(
       m_textServices->TxSendMessage(EM_SETSEL, static_cast<WPARAM>(0), static_cast<WPARAM>(-1), &res);
     }
   }
+
+  // FIT: bring up the touch keyboard when this input gains focus.
+  ShowSoftKeyboard();
 }
 
 std::string WindowsTextInputComponentView::DefaultControlType() const noexcept {
@@ -1390,18 +1453,50 @@ std::pair<float, float> WindowsTextInputComponentView::GetContentSize() const no
 
   // Use the layout width as the constraint (always multiline)
   float availableWidth = m_layoutMetrics.frame.size.width;
-  float scale = m_layoutMetrics.pointScaleFactor;
-  float dpi = m_layoutMetrics.pointScaleFactor * GetDpiForSystem();
+
+  // TxGetNaturalSize measures in the *device pixels of `hdc`*. GetDC(nullptr)
+  // returns a screen DC whose logical DPI (GetDeviceCaps LOGPIXELS) is the system
+  // DPI - typically 96 - and is unrelated to the per-monitor display scale carried
+  // in pointScaleFactor. The previous code conflated the two
+  // (dpi = pointScaleFactor * GetDpiForSystem()) and then divided the returned
+  // natural size by pointScaleFactor, so at any display scale > 100% the measured
+  // content height came back short by exactly that scale and
+  // calculateContentVerticalOffset() over-centered the text (parked low /
+  // bottom-clipped). Normalize both conversions by the DC's real DPI instead. DIPs
+  // are 1/96in by definition, so the DIP<->HIMETRIC leg always uses 96.
+  const int hdcDpiX = GetDeviceCaps(hdc, LOGPIXELSX);
+  const int hdcDpiY = GetDeviceCaps(hdc, LOGPIXELSY);
   constexpr float HIMETRIC_PER_INCH = 2540.0f;
+  constexpr float DIPS_PER_INCH = 96.0f;
 
+  // The cy extent is the "unbounded height" sentinel for TXTNS_FITTOCONTENTWSP.
+  // It must NOT be LONG_MAX run through the DIP->HIMETRIC conversion: LONG_MAX *
+  // 2540 / 96 is ~5.68e10, which overflows LONG by ~26.5x. static_cast<LONG> of an
+  // out-of-range float is undefined behavior and on MSVC/x64 (cvttss2si) yields the
+  // integer-indefinite value 0x80000000 == LONG_MIN, so RichEdit was handed a
+  // NEGATIVE height constraint. TxGetNaturalSize then returns cy == 0, contentHeight
+  // collapses to 0, and calculateContentVerticalOffset() centers on
+  // (boxHeight - 0) / 2 -- which is exactly the "text parked low / clipped at the
+  // bottom" symptom. This is independent of the DPI normalization above: the stock
+  // code (LONG_MAX * 2540 / dpi) overflows identically, which is why the DPI fix
+  // alone did not change rendering on machines where the overflow dominates.
+  // Use a large FINITE extent instead -- 1e6 DIPs is far beyond any real text block
+  // and converts to ~2.65e7 HIMETRIC, comfortably inside LONG.
+  constexpr float UNBOUNDED_HEIGHT_DIPS = 1.0e6f;
   SIZE extentHimetric = {
-      static_cast<LONG>(availableWidth * scale * HIMETRIC_PER_INCH / dpi),
-      // -1 measures without zoom, matching how this host draws (TxGetExtent returns E_NOTIMPL).
-      // A positive extent is taken as a zoom reference; LONG_MAX scaled to HIMETRIC saturated to a
-      // huge positive value on ARM64 and shrank the natural height to about 0.
-      -1};
+      static_cast<LONG>(availableWidth * HIMETRIC_PER_INCH / DIPS_PER_INCH),
+      static_cast<LONG>(UNBOUNDED_HEIGHT_DIPS * HIMETRIC_PER_INCH / DIPS_PER_INCH)};
 
-  SIZE naturalSize = {0, 0};
+  // TxGetNaturalSize's pwidth/pheight are IN/OUT parameters: on INPUT they carry the
+  // size to fit the content WITHIN (in device pixels of hdc); on OUTPUT RichEdit
+  // overwrites them with the measured natural size. Seeding them {0, 0} asks RichEdit
+  // to fit the text into a ZERO-width box, and it answers with a degenerate 1x1 --
+  // measured on-device: "natCx=1 natCy=1" for a 443-DIP-wide input. contentHeight then
+  // collapses to ~0 and calculateContentVerticalOffset() centers on
+  // (frameHeight - 0) / 2, parking the line at the BOTTOM of the control -- the
+  // long-standing "text sits low / descenders clipped" symptom. Seed the available
+  // width, converted DIP -> device px with the DC's own DPI.
+  SIZE naturalSize = {static_cast<LONG>(availableWidth * hdcDpiX / DIPS_PER_INCH), 0};
 
   HRESULT hr = m_textServices->TxGetNaturalSize(
       DVASPECT_CONTENT,
@@ -1419,8 +1514,10 @@ std::pair<float, float> WindowsTextInputComponentView::GetContentSize() const no
     return {0.0f, 0.0f};
   }
 
-  float contentWidth = static_cast<float>(naturalSize.cx) / scale;
-  float contentHeight = static_cast<float>(naturalSize.cy) / scale;
+  // naturalSize is in the DC's device pixels; convert device px -> DIPs using the
+  // DC's actual DPI (px * 96 / hdcDpi), not pointScaleFactor.
+  float contentWidth = static_cast<float>(naturalSize.cx) * DIPS_PER_INCH / hdcDpiX;
+  float contentHeight = static_cast<float>(naturalSize.cy) * DIPS_PER_INCH / hdcDpiY;
 
   return {contentWidth, contentHeight};
 }

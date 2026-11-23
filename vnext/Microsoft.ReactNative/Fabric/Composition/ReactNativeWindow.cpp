@@ -116,6 +116,14 @@ void ReactNativeWindow::AppWindow(const winrt::Microsoft::UI::Windowing::AppWind
 void ReactNativeWindow::AppWindow_Changed(
     winrt::Microsoft::UI::Windowing::AppWindow const &window,
     winrt::Microsoft::UI::Windowing::AppWindowChangedEventArgs const &args) noexcept {
+  // FIT: re-sync the island scale on moves/resizes. The scale was previously
+  // set only ONCE (island attach / bridge creation), so dragging the window to
+  // a monitor with a different scale left the island rendering at the launch
+  // monitor's scale — RichEdit text drawn into a canvas larger than the
+  // visible box ("text hiding at top-left") on screen-share displays.
+  if (args.DidPositionChange() || args.DidSizeChange()) {
+    UpdateIslandScaleFactor();
+  }
   if (args.DidSizeChange() || args.DidVisibilityChange()) {
     UpdateRootViewSizeToAppWindow(m_island, m_appWindow);
   }
@@ -179,8 +187,20 @@ winrt::Microsoft::UI::Content::IContentSiteBridge ReactNativeWindow::ContentSite
 
 void ReactNativeWindow::UpdateIslandScaleFactor() noexcept {
   if (m_island) {
-    auto scaleFactor = GetDpiForWindow(winrt::Microsoft::UI::GetWindowFromWindowId(m_appWindow.Id())) /
-        static_cast<float>(USER_DEFAULT_SCREEN_DPI);
+    // FIT: prefer the ContentIsland's RasterizationScale — the compositor's
+    // ground truth for how this content is actually rasterized. GetDpiForWindow
+    // LIES on virtual displays (measured: Mac screen-share reports 96 while the
+    // monitor's effective DPI is 120/1.25x, process PerMonitorV2-verified),
+    // which mis-scaled the island so RichEdit text drew outside the visible
+    // box. Fall back to GetDpiForWindow when no ContentIsland is attached yet.
+    float scaleFactor = 0.0f;
+    if (auto contentIsland = m_island.Island()) {
+      scaleFactor = contentIsland.RasterizationScale();
+    }
+    if (scaleFactor <= 0.0f) {
+      scaleFactor = GetDpiForWindow(winrt::Microsoft::UI::GetWindowFromWindowId(m_appWindow.Id())) /
+          static_cast<float>(USER_DEFAULT_SCREEN_DPI);
+    }
     m_island.ScaleFactor(scaleFactor);
   }
 }

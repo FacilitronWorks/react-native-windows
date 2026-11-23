@@ -26,6 +26,23 @@ import SwitchNativeComponent, {
 import * as React from 'react';
 import {useLayoutEffect, useRef, useState} from 'react';
 
+// [Windows
+// ARIA attributes are strings on the web, and cross-platform code passes them
+// that way: React Navigation's HeaderTitle renders aria-level="1". The native
+// accessibilityLevel / accessibilityPosInSet / accessibilitySetSize props are
+// ints. With the props iterator setter, HostPlatformViewProps::setProp parses
+// them with no fallback, so a string throws out of the Fabric host function
+// ("Value is a string, expected a number") and the whole tree unmounts.
+function toAccessibilityInt(value: mixed): ?number {
+  if (value == null) {
+    return undefined;
+  }
+  const parsed =
+    typeof value === 'number' ? value : parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+// Windows]
+
 export type SwitchInstance = HostInstance;
 
 export type SwitchPropsIOS = {
@@ -194,9 +211,15 @@ const Switch: component(
   } = props;
   const trackColorForFalse = trackColor?.false;
   const trackColorForTrue = trackColor?.true;
-  const _accessibilityLevel = ariaLevel ?? props.accessibilityLevel; // Windows
-  const _accessibilityPosInSet = ariaPosinset ?? props.accessibilityPosInSet; // Windows
-  const _accessibilitySetSize = ariaSetsize ?? props.accessibilitySetSize; // Windows
+  const _accessibilityLevel = toAccessibilityInt(
+    ariaLevel ?? props.accessibilityLevel,
+  ); // Windows
+  const _accessibilityPosInSet = toAccessibilityInt(
+    ariaPosinset ?? props.accessibilityPosInSet,
+  ); // Windows
+  const _accessibilitySetSize = toAccessibilityInt(
+    ariaSetsize ?? props.accessibilitySetSize,
+  ); // Windows
 
   const nativeSwitchRef = useRef<SwitchInstance | null>(null);
 

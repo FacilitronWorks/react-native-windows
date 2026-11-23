@@ -18,6 +18,23 @@ import {use} from 'react';
 import invariant from 'invariant'; // [Windows]
 // [Windows
 import type {KeyEvent} from '../../Types/CoreEventTypes';
+
+// [Windows
+// ARIA attributes are strings on the web, and cross-platform code passes them
+// that way: React Navigation's HeaderTitle renders aria-level="1". The native
+// accessibilityLevel / accessibilityPosInSet / accessibilitySetSize props are
+// ints. With the props iterator setter, HostPlatformViewProps::setProp parses
+// them with no fallback, so a string throws out of the Fabric host function
+// ("Value is a string, expected a number") and the whole tree unmounts.
+function toAccessibilityInt(value: mixed): ?number {
+  if (value == null) {
+    return undefined;
+  }
+  const parsed =
+    typeof value === 'number' ? value : parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+// Windows]
 // Windows]
 
 // [Windows
@@ -126,7 +143,7 @@ component View(ref?: React.RefSetter<ViewInstance>, ...props: ViewProps) {
 
   // Windows accessibility properties
   if (ariaLevel !== undefined) {
-    processedProps.accessibilityLevel = ariaLevel;
+    processedProps.accessibilityLevel = toAccessibilityInt(ariaLevel); // [Windows]
   }
 
   if (ariaDescription !== undefined) {
@@ -134,11 +151,11 @@ component View(ref?: React.RefSetter<ViewInstance>, ...props: ViewProps) {
   }
 
   if (ariaPosinset !== undefined) {
-    processedProps.accessibilityPosInSet = ariaPosinset;
+    processedProps.accessibilityPosInSet = toAccessibilityInt(ariaPosinset); // [Windows]
   }
 
   if (ariaSetsize !== undefined) {
-    processedProps.accessibilitySetSize = ariaSetsize;
+    processedProps.accessibilitySetSize = toAccessibilityInt(ariaSetsize); // [Windows]
   }
 
   if (id !== undefined) {

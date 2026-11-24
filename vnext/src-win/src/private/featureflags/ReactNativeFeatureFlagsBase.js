@@ -52,6 +52,23 @@ function createGetter<T extends boolean | number | string>(
   };
 }
 
+// [Windows
+// JavaScript flags whose default differs on Windows. An app can still set them
+// through the overrides.
+//
+// enableNativeEventTargetEventDispatching: on this path the renderer passes an
+// event to the responder system only while its target view is mounted. A touch
+// end aimed at a view that unmounted during the press (a button that closes its
+// sheet, an overlay that hides on focus) is dropped. That leaves the responder's
+// touch count one too high, and from then on a focused TextInput's selection
+// changes make it the responder, so the next mouse click on any other control is
+// swallowed. The legacy plugin path processes that touch end even when the
+// target has unmounted. React Native turned this flag on in 0.88.1.
+const windowsJavaScriptFlagDefaults: {readonly [string]: boolean} = {
+  enableNativeEventTargetEventDispatching: false,
+};
+// Windows]
+
 export function createJavaScriptFlagGetter<
   K extends keyof ReactNativeFeatureFlagsJsOnly,
 >(
@@ -64,7 +81,14 @@ export function createJavaScriptFlagGetter<
       accessedFeatureFlags.add(configName);
       return overrides?.[configName]?.();
     },
-    defaultValue,
+    // [Windows]
+    Object.prototype.hasOwnProperty.call(
+      windowsJavaScriptFlagDefaults,
+      configName,
+    )
+      ? // $FlowFixMe[incompatible-type] the Windows default has the flag's type
+        windowsJavaScriptFlagDefaults[configName]
+      : defaultValue,
   );
 }
 
